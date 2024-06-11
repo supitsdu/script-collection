@@ -3,23 +3,23 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 # ANSI color codes
-RESET='\e[0m'
-BOLD='\e[1m'
-GREEN='\e[32m'
-RED='\e[31m'
-YELLOW='\e[33m'
-BLUE='\e[34m'
+RESET='\033[0m'
+BOLD='\033[1m'
+GREEN='\033[32m'
+RED='\033[31m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
 
 # Function to handle errors
 handle_error() {
-    echo "${RED}[ERROR] $1$RESET"
+    echo "${RED}[ERROR] $1${RESET}"
     echo "[ERROR] $1" >>.git/cleanup_log.txt
     exit 1
 }
 
 # Function to log info messages
 log_info() {
-    echo "${BLUE}[INFO] $1$RESET"
+    echo "${BLUE}[INFO] $1${RESET}"
     echo "[INFO] $1" >>.git/cleanup_log.txt
 }
 
@@ -29,15 +29,17 @@ log_warn() {
     echo "[WARNING] $1" >>.git/cleanup_log.txt
 }
 
-# Function to log info messages
+# Function to log success messages
 log_success() {
-    echo "${GREEN}[SUCCESS] $1$RESET"
+    echo "${GREEN}[SUCCESS] $1${RESET}"
     echo "[SUCCESS] $1" >>.git/cleanup_log.txt
 }
 
+# Function to prompt the user
 log_prompt() {
-    printf "$BOLD%s$RESET " "$1"
+    printf "${BOLD}%s${RESET} " "$1"
 }
+
 # Function to prompt user for input
 prompt() {
     read -r response
@@ -99,7 +101,7 @@ delete_local_branches() {
 fetch_and_pull_updates() {
     main_branch=$1
     log_info "Fetching updates from the remote repository with tags..."
-    git fetch origin --tags >/dev/null 2>&1 || handle_error "Failed to fetch updates from the remote repository."
+    git fetch --all --tags --prune >/dev/null 2>&1 || handle_error "Failed to fetch updates from the remote repository."
     log_info "Pulling the latest changes for branch '$main_branch' from the remote repository..."
     git pull origin "$main_branch" --prune --rebase --tags >/dev/null 2>&1 || handle_error "Failed to pull the latest changes from the remote repository."
 }
@@ -119,17 +121,14 @@ reapply_or_drop_stash() {
     fi
 }
 
-# Main function
-main() {
-    check_git_repository
-
+warns_user() {
     # Provide information about the cleanup process
-    echo "$BOLD"
+    echo "${BOLD}"
     echo " ☛ This script will tidy up your local Git repository by:"
-    echo "   - Removing all local branches except the main/master branch."
+    echo "   - Removing all local branches except the primary branch."
     echo "   - Stashing any uncommitted changes temporarily with a timestamp."
     echo "   - Fetching and pulling the latest updates from the remote repository."
-    echo "$RESET"
+    echo "${RESET}"
 
     # Prompt user to confirm if they want to proceed
     log_prompt " > Do you want to continue with the cleanup process? (y/N)"
@@ -138,6 +137,13 @@ main() {
         log_warn "Cleanup process aborted by the user. Exiting."
         exit 0
     fi
+}
+
+# Main function
+main() {
+    check_git_repository
+
+    warns_user
 
     # Get the current branch
     current_branch=$(get_current_branch)
@@ -146,7 +152,7 @@ main() {
     log_prompt " > Is '$current_branch' your primary branch? (y/N)"
     is_main_branch=$(prompt)
     if [ "$is_main_branch" != "y" ]; then
-        log_prompt " > Please enter the name of your primary branch:"
+        log_prompt "    > Please enter the name of your primary branch:"
         main_branch=$(prompt)
     else
         main_branch=$current_branch
@@ -154,9 +160,9 @@ main() {
 
     # Prompt user to confirm deletion of each branch
     delete_branches=""
-    for branch in $(git branch --list | grep -v "^\*" | tr -d ' '); do
+    for branch in $(git branch --list | tr -d '* '); do
         if [ "$branch" != "$main_branch" ]; then
-            log_prompt "   > Are you sure you want to delete the branch '$branch'? (y/N)"
+            log_prompt "    > Are you sure you want to delete the branch '$branch'? (y/N)"
             confirm_delete=$(prompt)
             if [ "$confirm_delete" = "y" ]; then
                 delete_branches="$delete_branches $branch"
@@ -186,11 +192,23 @@ main() {
     # Backup local branches
     backup_local_branches
 
+    if [ "$main_branch" != "$current_branch" ]; then
+        log_info "Switching to the primary branch '$main_branch'..."
+        git checkout -B "$main_branch" --force --quiet >/dev/null 2>&1 || handle_error "Failed to switch to the primary branch '$main_branch'."
+    fi
+
     # Delete local branches
     delete_local_branches "$main_branch" "$delete_branches"
 
     # Fetch and pull updates
     fetch_and_pull_updates "$main_branch"
+
+    log_prompt " > Do you want to switch back to the previous branch '$current_branch'? (y/N)"
+    switch_back=$(prompt)
+    if [ "$switch_back" = "y" ]; then
+        log_info "Switching back to the branch '$current_branch'..."
+        git checkout -B "$current_branch" --force --quiet >/dev/null 2>&1 || handle_error "Failed to switch back to the branch '$current_branch'."
+    fi
 
     # Reapply or drop stashed changes
     if [ -n "$stash_name" ]; then
